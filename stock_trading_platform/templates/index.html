@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Trading Platform</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+    <div class="container">
+        <h1>Stock Trading Platform</h1>
+    </div>
+</header>
+
+<main class="container">
+    <!-- ── Row 1: Quote + Order ───────────────────────────────── -->
+    <div class="grid">
+        <div class="card">
+            <h2>Stock Quote</h2>
+            <div class="search-row">
+                <input id="quote-symbol" type="text" placeholder="Enter ticker (e.g. AAPL)">
+                <button class="btn-primary" onclick="fetchQuote()">Look Up</button>
+            </div>
+            <div id="quote-result"></div>
+        </div>
+
+        <div class="card">
+            <h2>Place Order</h2>
+            <div class="order-form">
+                <input id="order-symbol" type="text" placeholder="Ticker symbol" style="text-transform:uppercase">
+                <input id="order-shares" type="number" min="1" placeholder="Number of shares">
+                <div class="order-buttons">
+                    <button class="btn-buy" onclick="placeOrder('BUY')">Buy</button>
+                    <button class="btn-sell" onclick="placeOrder('SELL')">Sell</button>
+                </div>
+                <div id="order-message"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Row 2: Portfolio ────────────────────────────────────── -->
+    <div class="grid" style="margin-top:20px">
+        <div class="card full-width">
+            <h2>Portfolio</h2>
+            <div class="summary-bar" id="portfolio-summary">
+                <div class="summary-item"><span class="label">Total Value</span><span class="value" id="total-value">--</span></div>
+                <div class="summary-item"><span class="label">Cash</span><span class="value" id="cash-value">--</span></div>
+            </div>
+            <table>
+                <thead>
+                    <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th><th>Price</th><th>Mkt Value</th><th>Gain / Loss</th></tr>
+                </thead>
+                <tbody id="holdings-body">
+                    <tr><td colspan="6" class="loader">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ── Row 3: Order History ────────────────────────────────── -->
+    <div class="grid" style="margin-top:20px; margin-bottom:40px">
+        <div class="card full-width">
+            <h2>Order History</h2>
+            <table>
+                <thead>
+                    <tr><th>Time</th><th>Side</th><th>Symbol</th><th>Shares</th><th>Price</th><th>Total</th></tr>
+                </thead>
+                <tbody id="orders-body">
+                    <tr><td colspan="6" class="loader">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+
+<script>
+const fmt = n => n.toLocaleString("en-US", {style:"currency", currency:"USD"});
+
+/* ── Quote ──────────────────────────────────────────────────── */
+async function fetchQuote() {
+    const sym = document.getElementById("quote-symbol").value.trim();
+    if (!sym) return;
+    const el = document.getElementById("quote-result");
+    el.innerHTML = '<span class="loader">Fetching...</span>';
+    try {
+        const res = await fetch(`/api/quote/${sym}`);
+        const data = await res.json();
+        if (!res.ok) { el.textContent = data.error; return; }
+        const cls = data.change >= 0 ? "positive" : "negative";
+        const sign = data.change >= 0 ? "+" : "";
+        el.innerHTML = `
+            <div class="quote-name">${data.name} (${data.symbol})</div>
+            <div class="quote-price">${fmt(data.price)}</div>
+            <div class="${cls}">${sign}${data.change}%</div>`;
+        // Auto-fill order symbol
+        document.getElementById("order-symbol").value = data.symbol;
+    } catch(e) { el.textContent = "Network error"; }
+}
+
+document.getElementById("quote-symbol").addEventListener("keydown", e => {
+    if (e.key === "Enter") fetchQuote();
+});
+
+/* ── Order ──────────────────────────────────────────────────── */
+async function placeOrder(side) {
+    const symbol = document.getElementById("order-symbol").value.trim();
+    const shares = parseInt(document.getElementById("order-shares").value, 10);
+    const msg = document.getElementById("order-message");
+    if (!symbol || !shares || shares <= 0) {
+        msg.className = "error"; msg.textContent = "Enter a valid symbol and quantity."; return;
+    }
+    msg.className = ""; msg.style.display = "none";
+    try {
+        const res = await fetch("/api/order", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({symbol, side, shares}),
+        });
+        const data = await res.json();
+        if (!res.ok) { msg.className = "error"; msg.textContent = data.error; return; }
+        msg.className = "success"; msg.textContent = data.message;
+        refreshPortfolio();
+        refreshOrders();
+    } catch(e) { msg.className = "error"; msg.textContent = "Network error"; }
+}
+
+/* ── Portfolio ──────────────────────────────────────────────── */
+async function refreshPortfolio() {
+    try {
+        const res = await fetch("/api/portfolio");
+        const data = await res.json();
+        document.getElementById("total-value").textContent = fmt(data.total_value);
+        document.getElementById("cash-value").textContent = fmt(data.cash);
+        const tbody = document.getElementById("holdings-body");
+        if (data.holdings.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="color:#8899a6">No holdings yet. Place a buy order to get started.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.holdings.map(h => {
+            const cls = h.gain >= 0 ? "positive" : "negative";
+            const sign = h.gain >= 0 ? "+" : "";
+            return `<tr>
+                <td><strong>${h.symbol}</strong></td>
+                <td>${h.shares}</td>
+                <td>${fmt(h.avg_cost)}</td>
+                <td>${fmt(h.price)}</td>
+                <td>${fmt(h.market_value)}</td>
+                <td class="${cls}">${sign}${fmt(h.gain)}</td>
+            </tr>`;
+        }).join("");
+    } catch(e) {
+        document.getElementById("holdings-body").innerHTML = '<tr><td colspan="6">Error loading portfolio</td></tr>';
+    }
+}
+
+/* ── Order History ──────────────────────────────────────────── */
+async function refreshOrders() {
+    try {
+        const res = await fetch("/api/orders");
+        const data = await res.json();
+        const tbody = document.getElementById("orders-body");
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="color:#8899a6">No orders yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.map(o => {
+            const cls = o.side === "BUY" ? "badge-buy" : "badge-sell";
+            return `<tr>
+                <td>${new Date(o.timestamp + "Z").toLocaleString()}</td>
+                <td class="${cls}">${o.side}</td>
+                <td>${o.symbol}</td>
+                <td>${o.shares}</td>
+                <td>${fmt(o.price)}</td>
+                <td>${fmt(o.total)}</td>
+            </tr>`;
+        }).join("");
+    } catch(e) {
+        document.getElementById("orders-body").innerHTML = '<tr><td colspan="6">Error loading orders</td></tr>';
+    }
+}
+
+/* ── Init ───────────────────────────────────────────────────── */
+refreshPortfolio();
+refreshOrders();
+</script>
+</body>
+</html>
